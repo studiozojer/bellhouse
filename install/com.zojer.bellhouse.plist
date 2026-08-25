@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd template. Replace __ARMILLARY_ROOT__ and __BUN__ (`which bun`), then:
+     cp install/com.zojer.bellhouse.plist ~/Library/LaunchAgents/
+     launchctl load ~/Library/LaunchAgents/com.zojer.bellhouse.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.zojer.bellhouse</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__BUN__</string>
+    <string>__ARMILLARY_ROOT__/repos/bellhouse/bellhouse.ts</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ARMILLARY_ROOT</key><string>__ARMILLARY_ROOT__</string>
+  </dict>
+  <key>WorkingDirectory</key><string>__ARMILLARY_ROOT__</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>__ARMILLARY_ROOT__/local/state/bellhouse.stdout.log</string>
+  <key>StandardErrorPath</key><string>__ARMILLARY_ROOT__/local/state/bellhouse.stderr.log</string>
+</dict>
+</plist>
