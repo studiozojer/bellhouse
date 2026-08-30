@@ -31,7 +31,7 @@ path = "expocommons/ops"   # relative to the armillary root
 "inbound-lead" = "<shared secret for that bell>"
 ```
 
-**Binding** (`<binding>/bells.toml`, committed — no secrets, ever):
+**Binding** (`<binding>/bells.toml`, committed — no secrets, ever). **Read once, at process start.** Editing or pulling a `bells.toml` does not change what a running bellhouse serves — the bindings are loaded into memory at startup and never re-read. A binding edit is inert until `launchctl kickstart -k gui/$(id -u)/com.zojer.bellhouse`. Noted 2026-08-30, after a handler sat on disk for four days while the process served the version it had loaded before the pull:
 
 ```toml
 [[bells]]
