@@ -32,6 +32,15 @@ type Handler = {
   // push
   title_template?: string;
   body_template?: string;
+  /**
+   * Structured data carried alongside the notification, for the app to act on
+   * when it is tapped. Each value is filled from the payload exactly like the
+   * title and body templates, so a binding declares what travels rather than
+   * the whole payload going along for the ride: Expo caps a push at ~4KB and
+   * some payloads here carry lead material that has no business on a lock
+   * screen. Explicit keys keep both bounded.
+   */
+  data_template?: Record<string, string>;
   // shell
   argv?: string[];
   // agent
@@ -122,6 +131,13 @@ async function runHandlers(source: string, handlers: Handler[], binding: Binding
             body: fill(h.body_template ?? "", payload, raw),
             sound: "default",
             priority: "high",
+            ...(h.data_template
+              ? {
+                  data: Object.fromEntries(
+                    Object.entries(h.data_template).map(([k, v]) => [k, fill(v, payload, raw)]),
+                  ),
+                }
+              : {}),
           }),
         });
         log("handler.push", `${tag} status=${res.status}`);
