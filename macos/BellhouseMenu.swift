@@ -20,6 +20,7 @@ final class BellhouseMenu: NSObject, NSApplicationDelegate {
     func run(_ arguments: [String]) {
         guard !busy else { return }
         busy = true
+        if arguments.first != "status" { render() }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
             let process = Process(), output = Pipe()
@@ -49,6 +50,7 @@ final class BellhouseMenu: NSObject, NSApplicationDelegate {
     func row(_ title: String, action: Selector? = nil, represented: Any? = nil) -> NSMenuItem {
         let row = NSMenuItem(title: title, action: action, keyEquivalent: "")
         row.target = self
+        row.isEnabled = action != nil && !busy
         row.representedObject = represented
         return row
     }
@@ -57,6 +59,31 @@ final class BellhouseMenu: NSObject, NSApplicationDelegate {
         let enabled = value["enabled"] as? Bool ?? false
         let running = value["running"] as? Bool ?? false
         let menu = NSMenu()
+        menu.autoenablesItems = false
+        if let environment = value["environment"] as? [String: Any] {
+            let state = environment["state"] as? String ?? "Unavailable"
+            menu.addItem(row(busy ? "Updating environment…" : "Operator environment · \(state)"))
+            if state == "Running" || state == "Stopped" {
+                let action = row(state == "Running" ? "Stop Environment…" : "Start Environment", action: #selector(toggleEnvironment), represented: state)
+                action.isEnabled = !busy
+                menu.addItem(action)
+            }
+            for op in environment["operators"] as? [[String: Any]] ?? [] {
+                guard let name = op["name"] as? String else { continue }
+                let ready = op["ready"] as? Bool ?? false
+                let active = op["active"] as? Bool ?? false
+                let entry = row(name.capitalized + " · " + (ready ? (active ? "Running" : "Paused") : "Setup pending"))
+                let submenu = NSMenu()
+                submenu.addItem(row("Open Terminal in Home", action: #selector(operatorTerminal), represented: name))
+                submenu.addItem(row("View Recent Runs", action: #selector(operatorLogs), represented: name))
+                if !ready { submenu.addItem(row("Reply worker not configured")) }
+                entry.submenu = submenu
+                entry.isEnabled = !busy
+                menu.addItem(entry)
+            }
+            if state == "Running" && !(environment["guestAvailable"] as? Bool ?? false) { menu.addItem(row("Guest controls unavailable")) }
+            menu.addItem(.separator())
+        }
         menu.addItem(row(failure ?? (running ? (enabled ? "Bellhouse enabled" : "Bellhouse paused") : "Bellhouse service stopped")))
         item.button?.image = NSImage(systemSymbolName: enabled && running && failure == nil ? "bell" : "bell.slash", accessibilityDescription: "Bellhouse")
         if let active = value["active"] as? [String: Any], let binding = active["binding"] as? String {
@@ -85,6 +112,25 @@ final class BellhouseMenu: NSObject, NSApplicationDelegate {
     @objc func toggleBinding(_ sender: NSMenuItem) {
         guard let binding = sender.representedObject as? [String: Any], let name = binding["name"] as? String else { return }
         run([(binding["enabled"] as? Bool ?? false) ? "disable" : "enable", name, "--json"])
+    }
+    @objc func toggleEnvironment(_ sender: NSMenuItem) {
+        if sender.representedObject as? String == "Running" {
+            let alert = NSAlert()
+            alert.messageText = "Stop the operator environment?"
+            alert.informativeText = "All work inside the VM will stop. Operator files will be kept."
+            alert.addButton(withTitle: "Stop Environment")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            run(["environment", "stop", "--json"])
+        } else { run(["environment", "start", "--json"]) }
+    }
+    @objc func operatorTerminal(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        run(["environment", "terminal", name])
+    }
+    @objc func operatorLogs(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        run(["environment", "logs", name])
     }
     @objc func refresh() { run(["status", "--json"]) }
     @objc func quit() { NSApplication.shared.terminate(nil) }

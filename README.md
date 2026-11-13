@@ -101,3 +101,7 @@ Add `--activate` to install per-user LaunchAgents and `local/bin/bellhouse`. The
 To remove this installation, pause it, then `launchctl bootout gui/$(id -u)/com.zojer.bellhouse` and `launchctl bootout gui/$(id -u)/com.zojer.bellhouse.menu`, and remove those two plist files from `~/Library/LaunchAgents`. Keep the manifest, database, and binding payloads until any interrupted effects have been reviewed.
 
 Run lifecycle verification with `bun test` (requires permission to bind loopback sockets).
+
+## Shared operator VM
+
+[The operator environment guide](environment/README.md) describes the optional Lima VM, private operator homes, and native menu start/stop controls. This is environment provisioning; Tycho's autonomous Jera reply worker is not enabled. Existing host bindings retain their own lifecycle and remain separate from the VM.

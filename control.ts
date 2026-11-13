@@ -2,6 +2,7 @@ import { existsSync,mkdirSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from './src/config';
 import { State } from './src/state';
+import { environmentStatus, environmentChange, environmentTerminal } from './src/environment';
 process.umask(0o077);
 export async function status(config=loadConfig()) {
   const state=new State(config);
@@ -30,7 +31,14 @@ export async function change(enabled:boolean,binding?:string){
 if(import.meta.main){
   try{
     const args=process.argv.slice(2);const command=args.shift()??'status';
-    if(command==='init'){
+    if(command==='environment'){
+      const config=loadConfig();
+      const operation=args.shift();
+      if(operation==='start'||operation==='stop') await environmentChange(config,operation);
+      else if(operation==='terminal'||operation==='logs') await environmentTerminal(config,args.shift()??'',operation==='logs');
+      else if(operation!=='status') throw Error('Unknown environment command');
+      console.log(JSON.stringify({...await status(config),environment:await environmentStatus(config)}));
+    }else if(command==='init'){
       const root=process.env.ARMILLARY_ROOT;
       if(!root)throw Error('Set ARMILLARY_ROOT for init.');
       const path=process.env.BELLHOUSE_MANIFEST??join(root,'local/bellhouse.toml');mkdirSync(join(root,'local'),{recursive:true,mode:0o700});
@@ -40,7 +48,7 @@ if(import.meta.main){
       const json=args.includes('--json');const rest=args.filter(x=>x!=='--json');
       if(!['enable','disable','status'].includes(command)||rest.length>1||(command==='status'&&rest.length))throw Error('Usage: bellhouse status [--json] | enable [binding] | disable [binding]');
       const value=command==='status'?await status():await change(command==='enable',rest[0]);
-      if(json)console.log(JSON.stringify(value));else{
+      if(json)console.log(JSON.stringify({...value,environment:await environmentStatus(loadConfig())}));else{
         console.log(`Bellhouse ${value.enabled?'enabled':'disabled'} · ${value.running?'service running':'service stopped'}${value.active?' · working':''}`);
         for(const b of value.bindings)console.log(`  ${b.name}: ${b.enabled?'enabled':'disabled'}${b.active?' · working':''}`);
         const attention=(value.counts as any[]).filter(x=>['interrupted','failed','configuration-changed'].includes(x.status)).reduce((n,x)=>n+x.count,0);
