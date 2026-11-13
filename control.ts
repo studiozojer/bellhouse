@@ -19,7 +19,7 @@ export async function status(config=loadConfig()) {
 export async function change(enabled:boolean,binding?:string){
   const config=loadConfig(),state=new State(config);state.set(enabled,binding);
   const revision=state.revision();state.db.close();
-  const deadline=Date.now()+5000;let value:any;
+  const deadline=Date.now()+15000;let value:any;
   do{
     value=await status(config);
     const active=binding?value.active?.binding===binding:!!value.active;

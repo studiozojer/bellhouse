@@ -61,6 +61,14 @@ argv = ["sh", "some-script.sh"]
 
 Any handler takes `enabled = false` to stay declared but dormant.
 
+## Cron supervision
+
+Cron shell and agent handlers run through `cron-runner.ts` and `bin/run-cron.py`. Each binding/cron/handler has a host-local file lock under `local/state/cron-locks/`, with an in-memory guard to avoid redundant wrapper spawns. An overlapping invocation is skipped, including across independent Bellhouse instances or a restart while an older handler still owns its lock. Handler children inherit the lock. Ordinary bell events remain independent deliveries rather than being coalesced by cron identity.
+
+The default process-handler timeout is 900 seconds. Set `timeout_seconds = <integer>` on a cron to choose 1–86,400 seconds. On timeout or supervisor termination, the wrapper sends TERM to the isolated process group, allows ten seconds for cleanup, then kills remaining descendants before releasing the lock. Process-group cleanup also covers a parent that exits before its child. Cron results remain content-free: overlap is exit 75, timeout is exit 124, launch/configuration failure is exit 125, and termination is 128 plus the signal; other handler exit codes are preserved. Push requests have a 15-second default HTTP timeout, overridable by the cron timeout. Existing durable worker leases and write receipts remain authoritative; process supervision does not retry uncertain external actions.
+
+Run `bun test cron-runner.test.ts` and `python3 bin/test-run-cron.py` for synthetic overlap, independent-handler, timeout/descendant, termination, lock-release and symlink-refusal checks. A source deployment must include `bellhouse.ts`, `cron-runner.ts` and `bin/run-cron.py`, and reload the existing LaunchAgent after verifying the deployed files. Preserve its manifest, environment, bindings and credentials.
+
 ## Ringing a bell
 
 ```sh

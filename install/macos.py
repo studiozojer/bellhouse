@@ -23,7 +23,7 @@ source = Path(__file__).resolve().parent.parent
 if not root.is_dir() or not bun.is_file():
     parser.error('Root and Bun executable must exist')
 os.umask(0o077)
-files = [Path('bellhouse.ts'), Path('control.ts'), *sorted(Path('src') / p.name for p in (source / 'src').glob('*.ts')), Path('macos/BellhouseMenu.swift')]
+files = [Path('cron-runner.ts'), Path('bin/run-cron.py'), Path('bellhouse.ts'), Path('control.ts'), *sorted(Path('src') / p.name for p in (source / 'src').glob('*.ts')), Path('macos/BellhouseMenu.swift')]
 digest = hashlib.sha256()
 for file in files:
     digest.update(str(file).encode()); digest.update((source / file).read_bytes())

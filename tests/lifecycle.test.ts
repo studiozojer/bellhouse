@@ -89,3 +89,14 @@ test('pause also kills a stubborn descendant after its parent exits',async()=>{
   expect((f.state.counts() as any[]).some(x=>x.status==='interrupted')).toBe(true);
  }finally{await r.stop();f.cleanup();}
 });
+test('pausing a cron waits for wrapper cleanup and retains interruption',async()=>{
+ const f=fixture("require('fs').writeFileSync(process.env.BELL_BINDING_DIR+'/state/started','yes');setInterval(()=>{},100);",'[[crons]]\nname="poll"\nschedule="* * * * *"\ntimeout_seconds=60\n');
+ f.config.bindings[0].crons[0].handlers=f.config.bindings[0].bells[0].handlers;
+ f.state.set(true);const r=new Runtime(f.config);
+ try{
+  await until(()=>existsSync(join(f.root,'binding/state/started')));
+  f.state.set(false);r.observe();
+  await sleep(2200);expect(r.active).not.toBe(null);
+  await r.stop();expect((f.state.counts() as any[]).some(x=>x.status==='interrupted')).toBe(true);
+ }finally{await r.stop();f.cleanup();}
+},15000);
