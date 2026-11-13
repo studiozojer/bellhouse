@@ -87,3 +87,29 @@ The global log (`local/state/bellhouse.log`) is content-free by design: timestam
 ## Always-on
 
 `install/com.zojer.bellhouse.plist` is a launchd template — fill in the paths, `cp` to `~/Library/LaunchAgents/`, `launchctl load` it. Public reachability (for external webhooks) is deliberately out of scope: put a Tailscale funnel or Cloudflare tunnel in front, keep `bind = "127.0.0.1"`.
+
+## Laptop controls
+
+Initialize a new host with `ARMILLARY_ROOT=/path/to/armillary bun control.ts init`. New hosts start paused; existing manifests retain their enabled default. `bun control.ts enable`, `disable`, and `status` control the host. Pass a binding name to enable/disable just that binding, and `--json` for machine-readable status. Set `ARMILLARY_ROOT` explicitly when using a worktree or installed snapshot.
+
+Pause is persistent, independent of launchd. The service remains alive while paused; authenticated bells receive 503 and aren't accepted. Previously accepted, queued jobs wait for re-enabling. Pausing stops tracked subprocess groups and prevents remaining handlers from starting. Effects already committed to an external service cannot be undone. Handlers must not daemonize or escape their process group. Interrupted or failed work is retained for manual review and never automatically replayed. Domain bindings must reconcile ambiguous external effects before submitting new work.
+
+The host records queue metadata, schedule slots, deduplication hashes, and controls in `local/state/bellhouse.sqlite`. Actual payloads remain within each binding's private `state/` directory. Handlers execute serially across the host. A successful bell response means durable acceptance, not handler completion. `/status` exposes content-free status; mutations are local CLI operations, not HTTP endpoints. A full queue (1,000 pending jobs) returns 503. Completed history and payloads are retained; automatic retention cleanup and a review UI are not yet implemented.
+
+After restart, previously running jobs become interrupted. Queued jobs with changed handler configuration or agent prompt content are held for review. Shell executable contents are not fingerprinted: bindings should point to immutable releases. Binding manifests remain loaded once at startup; missing/invalid bindings fail startup. Cron slots persist across restarts. The scheduler evaluates the current local minute, without replaying all missed minutes. Set `on_resume = true` on a poller cron for one fresh startup/wake scan; the binding owns bounded catch-up and its cursor. Day-of-month and day-of-week continue to use AND matching. Old file-based deduplication markers are not imported; pause existing webhook producers during migration and reconcile their outstanding deliveries.
+
+On macOS, prepare a private release with:
+
+```sh
+python3 install/macos.py --root /path/to/armillary --bun /absolute/path/to/bun
+```
+
+Add `--activate` to install per-user LaunchAgents and `local/bin/bellhouse`. The installer compiles the native AppKit menu using an existing Swift toolchain, ad-hoc signs it, and stores a source snapshot under `~/Library/Application Support/Studio Zojer/Bellhouse/releases/`. It refuses to replace differing existing agents or control links; upgrading requires explicit migration. The menu starts at login and shows host controls, binding toggles, service availability, and executions needing review. Quitting the menu leaves the service running. The daemon restarts after an exit; pause it through the menu or CLI instead of killing it. No sleep prevention or public tunnel is installed.
+
+To remove this installation, pause it, then `launchctl bootout gui/$(id -u)/com.zojer.bellhouse` and `launchctl bootout gui/$(id -u)/com.zojer.bellhouse.menu`, and remove those two plist files from `~/Library/LaunchAgents`. Keep the manifest, database, and binding payloads until any interrupted effects have been reviewed.
+
+Run lifecycle verification with `bun test` (requires permission to bind loopback sockets).
+
+## Shared operator VM
+
+[The operator environment guide](environment/README.md) describes the optional Lima VM, private operator homes, and native menu start/stop controls. This is environment provisioning; Tycho's autonomous Jera reply worker is not enabled. Existing host bindings retain their own lifecycle and remain separate from the VM.

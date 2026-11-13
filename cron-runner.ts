@@ -5,7 +5,7 @@ import { join } from "path";
 // spawning redundant lock wrappers during normal operation.
 export function createCronRunner(root: string, report: (event: string, detail: string) => void) {
   const running = new Set<string>();
-  return async (key: string, tag: string, argv: string[], env: Record<string, string | undefined>, timeoutSeconds = 900) => {
+  return async (key: string, tag: string, argv: string[], env: Record<string, string | undefined>, timeoutSeconds = 900, signal?: AbortSignal) => {
     if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86400) {
       report("handler.error", `${tag} invalid_timeout`);
       return 125;
@@ -14,6 +14,7 @@ export function createCronRunner(root: string, report: (event: string, detail: s
       report("handler.skip", `${tag} reason=overlap`);
       return 75;
     }
+    if (signal?.aborted) return 143;
     running.add(key);
     try {
       const lock = createHash("sha256").update(key).digest("hex");
@@ -23,7 +24,13 @@ export function createCronRunner(root: string, report: (event: string, detail: s
         "--timeout", String(timeoutSeconds), "--", ...argv,
       ], { cwd: root, env, stdout: "ignore", stderr: "ignore" });
       report("handler.spawn", `${tag} pid=${proc.pid}`);
-      const code = await proc.exited;
+      // The wrapper owns descendant cleanup; let its ten-second grace finish.
+      const abort = () => proc.kill("SIGTERM");
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) abort();
+      let code: number;
+      try { code = await proc.exited; }
+      finally { signal?.removeEventListener("abort", abort); }
       if (code === 75) report("handler.skip", `${tag} reason=overlap`);
       else if (code === 124) report("handler.timeout", tag);
       report("handler.exit", `${tag} code=${code}`);
