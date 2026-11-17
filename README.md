@@ -112,4 +112,4 @@ Run lifecycle verification with `bun test` (requires permission to bind loopback
 
 ## Shared operator VM
 
-[The operator environment guide](environment/README.md) describes the optional Lima VM, private operator homes, and native menu start/stop controls. This is environment provisioning; Tycho's autonomous Jera reply worker is not enabled. Existing host bindings retain their own lifecycle and remain separate from the VM.
+[Hearth](https://github.com/studiozojer/hearth) owns VM provisioning, operator homes and reply runners. [The integration guide](environment/README.md) describes the boundary with Bellhouse's native menu and existing-VM controls. Existing host bindings retain their own lifecycle; enabling Bellhouse does not enable autonomous replies.
