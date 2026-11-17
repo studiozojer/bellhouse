@@ -11,6 +11,30 @@ import unittest
 WRAPPER = Path(__file__).with_name('run-cron.py')
 
 class CronTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux guest subreaper')
+    def test_detached_tree_is_reaped_after_every_job_outcome(self):
+        for mode in ('normal', 'crash', 'timeout', 'pause'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                pidfile = Path(directory) / 'worker.pid'
+                # Both generations escape the handler's process group. The leaf
+                # ignores TERM, closes stdio and could otherwise run indefinitely.
+                leaf = "import os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); open(%r,'w').write(str(os.getpid())); time.sleep(60)" % str(pidfile)
+                worker = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',%r],start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); time.sleep(60)" % leaf
+                leader = "import subprocess,sys,time,os,signal; from pathlib import Path; subprocess.Popen([sys.executable,'-c',%r],start_new_session=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);\nwhile not Path(%r).exists(): time.sleep(.01)\n" % (worker, str(pidfile))
+                leader += {'normal':'sys.exit(0)', 'crash':'os.kill(os.getpid(),signal.SIGKILL)', 'timeout':'time.sleep(60)', 'pause':'time.sleep(60)'}[mode]
+                proc = subprocess.Popen([sys.executable,str(WRAPPER),'--lock',directory+'/job.lock','--timeout','0.8','--grace','0.1','--',sys.executable,'-c',leader])
+                try:
+                    deadline = time.monotonic()+3
+                    while not pidfile.exists() and time.monotonic()<deadline: time.sleep(.01)
+                    self.assertTrue(pidfile.exists())
+                    pid = int(pidfile.read_text())
+                    if mode == 'pause': proc.terminate()
+                    self.assertEqual(proc.wait(timeout=4), {'normal':0,'crash':137,'timeout':124,'pause':143}[mode])
+                    self.assertFalse(Path('/proc',str(pid)).exists(), 'orphan was not reaped')
+                    self.assertEqual(subprocess.run([sys.executable,str(WRAPPER),'--lock',directory+'/job.lock','--timeout','1','--','true']).returncode,0)
+                finally:
+                    if proc.poll() is None: proc.kill();proc.wait()
+
     def test_timeout_terminates_descendant_even_if_parent_exits_on_term(self):
         with tempfile.TemporaryDirectory() as directory:
             pidfile = Path(directory) / 'child.pid'

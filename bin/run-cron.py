@@ -7,6 +7,85 @@ from pathlib import Path
 import signal
 import subprocess
 import time
+import sys
+import ctypes
+
+
+def linux_children(pid):
+    """All threads can spawn children (Bun does); include adopted orphans."""
+    children = set()
+    for task in Path('/proc', str(pid), 'task').glob('*'):
+        try:
+            children.update(map(int, (task / 'children').read_text().split()))
+        except FileNotFoundError:
+            pass
+    return children
+
+
+def linux_tree(pid):
+    found, todo = set(), [pid]
+    while todo:
+        for child in linux_children(todo.pop()):
+            if child not in found:
+                found.add(child)
+                todo.append(child)
+    return found
+
+
+def run_linux(command, fd, timeout, grace, stopped):
+    # Adopt orphaned descendants, including workers which start their own
+    # process groups. No privileges or dependency on a per-user systemd needed.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), 'subreaper unavailable')
+    child = subprocess.Popen(command, start_new_session=True, pass_fds=(fd,))
+    deadline = time.monotonic() + timeout
+    while stopped[0] is None and time.monotonic() < deadline:
+        # Observe without reaping until the handler's outcome is decided.
+        result = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if result is not None:
+            break
+        time.sleep(min(0.02, max(0, deadline-time.monotonic())))
+    else:
+        result = None
+    outcome = (os.waitstatus_to_exitcode(os.waitpid(child.pid, 0)[1]) if result is not None
+               else 128 + stopped[0] if stopped[0] is not None else 124)
+    if result is not None:
+        child.returncode = outcome
+    # Normal return and parent crash also end the job. A detached worker must
+    # never keep spending after the handler is reported done/failed.
+    deadline = time.monotonic() + grace
+    sent = set()
+    while True:
+        descendants = linux_tree(os.getpid())
+        sig = signal.SIGKILL if time.monotonic() >= deadline else signal.SIGTERM
+        for pid in descendants:
+            if sig == signal.SIGTERM and pid in sent:
+                continue
+            try:
+                # A grandchild can be reaped by its parent while enumerating.
+                # Pin the process identity, then confirm it is still our tree.
+                handle = os.pidfd_open(pid)
+                try:
+                    if pid in linux_tree(os.getpid()):
+                        signal.pidfd_send_signal(handle, sig)
+                        sent.add(pid)
+                finally:
+                    os.close(handle)
+            except ProcessLookupError:
+                pass
+        # Reap adopted orphans, then re-enumerate: a child may just have become
+        # our direct child. Keep the lock until the entire tree is gone.
+        while True:
+            try:
+                pid, status = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    break
+                if pid == child.pid:
+                    child.returncode = os.waitstatus_to_exitcode(status)
+            except ChildProcessError:
+                return outcome if outcome >= 0 else 128 - outcome
+        time.sleep(0.02)
 
 
 def run(lock_path, timeout, grace, command):
@@ -25,6 +104,8 @@ def run(lock_path, timeout, grace, command):
                 stopped[0] = sig
         previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
         try:
+            if sys.platform == 'linux':
+                return run_linux(command, fd, timeout, grace, stopped)
             child = subprocess.Popen(command, start_new_session=True, pass_fds=(fd,))
             deadline = time.monotonic() + timeout
             while stopped[0] is None and time.monotonic() < deadline:
