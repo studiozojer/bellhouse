@@ -58,6 +58,9 @@ final class BellhouseMenu: NSObject, NSApplicationDelegate {
     func render() {
         let enabled = value["enabled"] as? Bool ?? false
         let running = value["running"] as? Bool ?? false
+        let scheduler = value["scheduler"] as? [String: Any]
+        let available = scheduler?["available"] as? Bool ?? true
+        let location = scheduler?["operator"] as? String
         let menu = NSMenu()
         menu.autoenablesItems = false
         if let environment = value["environment"] as? [String: Any] {
@@ -84,12 +87,15 @@ final class BellhouseMenu: NSObject, NSApplicationDelegate {
             if state == "Running" && !(environment["guestAvailable"] as? Bool ?? false) { menu.addItem(row("Guest controls unavailable")) }
             menu.addItem(.separator())
         }
-        menu.addItem(row(failure ?? (running ? (enabled ? "Bellhouse enabled" : "Bellhouse paused") : "Bellhouse service stopped")))
-        item.button?.image = NSImage(systemSymbolName: enabled && running && failure == nil ? "bell" : "bell.slash", accessibilityDescription: "Bellhouse")
+        if let location = location { menu.addItem(row("Bellhouse in Hearth · \(location.capitalized)")) }
+        menu.addItem(row(failure ?? (!available ? "Guest scheduler unavailable" : (running ? (enabled ? "Bellhouse enabled" : "Bellhouse paused") : "Bellhouse service stopped"))))
+        item.button?.image = NSImage(systemSymbolName: enabled && running && available && failure == nil ? "bell" : "bell.slash", accessibilityDescription: "Bellhouse")
         if let active = value["active"] as? [String: Any], let binding = active["binding"] as? String {
             menu.addItem(row("Working: \(binding)"))
         }
-        menu.addItem(row(enabled ? "Pause Bellhouse" : "Enable Bellhouse", action: #selector(toggleHost), represented: enabled))
+        let toggle = row(enabled ? "Pause Bellhouse" : "Enable Bellhouse", action: #selector(toggleHost), represented: enabled)
+        toggle.isEnabled = !busy && available && failure == nil
+        menu.addItem(toggle)
         menu.addItem(.separator())
         let bindings = value["bindings"] as? [[String: Any]] ?? []
         if bindings.isEmpty { menu.addItem(row("No bindings configured")) }

@@ -113,3 +113,5 @@ Run lifecycle verification with `bun test` (requires permission to bind loopback
 ## Shared operator VM
 
 [Hearth](https://github.com/studiozojer/hearth) owns VM provisioning, operator homes and reply runners. [The integration guide](environment/README.md) describes the boundary with Bellhouse's native menu and existing-VM controls. Existing host bindings retain their own lifecycle; enabling Bellhouse does not enable autonomous replies.
+
+For an operator whose scheduler lives inside Hearth, select `[scheduler] operator = "tycho"` in the machine manifest and use the documented `--menu-only` migration. The Mac then keeps the native controller while the guest owns scheduling and durable execution state. Guest unavailability never falls back to host execution. Run `bun test` for the guest-routing and existing lifecycle tests, and `python3 bin/test-run-cron.py` for process supervision checks.

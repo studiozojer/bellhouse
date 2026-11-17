@@ -4,6 +4,7 @@ Without --activate, only prepare artifacts; existing launch agents are untouched
 """
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -17,6 +18,7 @@ parser.add_argument('--root', required=True, type=Path)
 parser.add_argument('--bun', required=True, type=Path)
 parser.add_argument('--activate', action='store_true')
 parser.add_argument('--upgrade', action='store_true', help='Replace a verified Bellhouse installation, retaining rollback plists')
+parser.add_argument('--menu-only', action='store_true', help='Control a configured guest scheduler and retire this installation\'s host daemon')
 args = parser.parse_args()
 root, bun = args.root.resolve(), args.bun.resolve()
 source = Path(__file__).resolve().parent.parent
@@ -29,6 +31,7 @@ for file in files:
     digest.update(str(file).encode()); digest.update((source / file).read_bytes())
 # Installation inputs belong to the snapshot identity too.
 digest.update(str(root).encode()); digest.update(str(bun).encode())
+digest.update(b'menu-only' if args.menu_only else b'host-daemon')
 release = Path.home() / 'Library/Application Support/Studio Zojer/Bellhouse/releases' / digest.hexdigest()[:16]
 release.mkdir(parents=True, exist_ok=True)
 for file in files:
@@ -51,10 +54,12 @@ logs.mkdir(parents=True, exist_ok=True)
 env = {'ARMILLARY_ROOT': str(root), 'BELLHOUSE_CONTROL': str(wrapper), 'PATH': str(bun.parent) + ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'}
 prepared = release / 'LaunchAgents'
 prepared.mkdir(exist_ok=True)
-for label, argv, keep_alive in [
+services = [
     ('com.zojer.bellhouse', [str(bun), str(release / 'bellhouse.ts')], True),
     ('com.zojer.bellhouse.menu', [str(app / 'MacOS/BellhouseMenu')], False),
-]:
+]
+if args.menu_only: services = services[1:]
+for label, argv, keep_alive in services:
     data = {'Label': label, 'ProgramArguments': argv, 'WorkingDirectory': str(root), 'EnvironmentVariables': env, 'RunAtLoad': True, 'KeepAlive': keep_alive, 'ThrottleInterval': 10, 'StandardOutPath': str(logs / (label + '.stdout.log')), 'StandardErrorPath': str(logs / (label + '.stderr.log'))}
     with (prepared / (label + '.plist')).open('wb') as f:
         plistlib.dump(data, f)
@@ -63,6 +68,25 @@ if args.activate:
     # Refuse to replace another installation without an explicit migration.
     agents = Path.home() / 'Library/LaunchAgents'
     agents.mkdir(parents=True, exist_ok=True)
+    retired = agents / 'com.zojer.bellhouse.plist'
+    if args.menu_only:
+        # This is a concrete migration, not a request to drop other host bindings.
+        metadata = json.loads(subprocess.check_output([str(bun),'-e',
+            'const c=Bun.TOML.parse(await Bun.file(process.argv[1]).text());console.log(JSON.stringify({bindings:c.bindings?.length??0,scheduler:!!c.scheduler}));',
+            str(root/'local/bellhouse.toml')],text=True))
+        guest = json.loads(subprocess.check_output([str(wrapper),'status','--json'],text=True))
+        if metadata['bindings'] or not metadata['scheduler'] or not guest.get('scheduler',{}).get('available') or not guest.get('running') or guest.get('enabled'):
+            raise SystemExit('Menu-only migration requires no host bindings and a reachable, running, paused guest scheduler')
+        if retired.exists():
+            old = plistlib.loads(retired.read_bytes())
+            old_control = Path(old.get('EnvironmentVariables',{}).get('BELLHOUSE_CONTROL',''))
+            if not args.upgrade or old.get('Label')!='com.zojer.bellhouse' or old.get('EnvironmentVariables',{}).get('ARMILLARY_ROOT')!=str(root) or not old_control.is_relative_to(release.parent.resolve()) or not old_control.is_file():
+                raise SystemExit('Refusing to retire an unrecognized host daemon')
+            previous = json.loads(subprocess.check_output([str(old_control),'status','--json'],text=True))
+            if previous.get('enabled') or previous.get('active') or previous.get('bindings') or any(row.get('status') in ['queued','running'] and row.get('count',0) for row in previous.get('counts',[])):
+                raise SystemExit('Pause and reconcile existing host work before migration')
+            rollback=release/'rollback';rollback.mkdir(exist_ok=True)
+            if not (rollback/retired.name).exists():shutil.copyfile(retired,rollback/retired.name)
     for file in prepared.glob('*.plist'):
         dest = agents / file.name
         if dest.exists() and dest.read_bytes() != file.read_bytes():
@@ -98,6 +122,15 @@ if args.activate:
     else:
         link.symlink_to(wrapper)
     domain = 'gui/' + str(os.getuid())
+    if args.menu_only and retired.exists():
+        label=domain+'/com.zojer.bellhouse'
+        if subprocess.run(['launchctl','print',label],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:
+            subprocess.run(['launchctl','bootout',label],check=True)
+            for attempt in range(100):
+                if subprocess.run(['launchctl','print',label],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode!=0:break
+                time.sleep(0.1)
+            else:raise SystemExit('Old host daemon has not unloaded')
+        retired.unlink()
     for file in sorted(prepared.glob('*.plist')):
         dest = agents / file.name
         label = file.stem

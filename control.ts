@@ -3,8 +3,12 @@ import { join } from 'node:path';
 import { loadConfig } from './src/config';
 import { State } from './src/state';
 import { environmentStatus, environmentChange, environmentTerminal } from './src/environment';
+import { schedulerSettings,guestControl,unavailableScheduler } from './src/scheduler';
 process.umask(0o077);
 export async function status(config=loadConfig()) {
+  if(schedulerSettings(config)) {
+    try{return await guestControl(config,'status');}catch{return unavailableScheduler(config);}
+  }
   const state=new State(config);
   const address=config.local.server?.bind??'127.0.0.1';
   const host=['0.0.0.0','::'].includes(address)?'127.0.0.1':address;
@@ -17,7 +21,9 @@ export async function status(config=loadConfig()) {
   state.db.close();return result;
 }
 export async function change(enabled:boolean,binding?:string){
-  const config=loadConfig(),state=new State(config);state.set(enabled,binding);
+  const config=loadConfig();
+  if(schedulerSettings(config))return await guestControl(config,enabled?'enable':'disable',binding);
+  const state=new State(config);state.set(enabled,binding);
   const revision=state.revision();state.db.close();
   const deadline=Date.now()+15000;let value:any;
   do{
@@ -49,7 +55,7 @@ if(import.meta.main){
       if(!['enable','disable','status'].includes(command)||rest.length>1||(command==='status'&&rest.length))throw Error('Usage: bellhouse status [--json] | enable [binding] | disable [binding]');
       const value=command==='status'?await status():await change(command==='enable',rest[0]);
       if(json)console.log(JSON.stringify({...value,environment:await environmentStatus(loadConfig())}));else{
-        console.log(`Bellhouse ${value.enabled?'enabled':'disabled'} · ${value.running?'service running':'service stopped'}${value.active?' · working':''}`);
+        console.log('scheduler' in value && !value.scheduler.available ? 'Bellhouse guest scheduler unavailable' : `Bellhouse ${value.enabled?'enabled':'disabled'} · ${value.running?'service running':'service stopped'}${value.active?' · working':''}`);
         for(const b of value.bindings)console.log(`  ${b.name}: ${b.enabled?'enabled':'disabled'}${b.active?' · working':''}`);
         const attention=(value.counts as any[]).filter(x=>['interrupted','failed','configuration-changed'].includes(x.status)).reduce((n,x)=>n+x.count,0);
         if(attention)console.log(`  ${attention} execution(s) need review; uncertain effects are not automatically repeated.`);
