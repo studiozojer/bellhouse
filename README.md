@@ -1,117 +1,19 @@
-# bellhouse
+# Bellhouse
 
-A small always-on doorbell + cron service for an armillary workspace. Mechanism only: bellhouse knows **bells** (named HTTP endpoints), **crons** (schedules), and **handlers** (what a ring does). It knows nothing about any domain — what rings, and what ringing means, is declared by **bindings**, the same move the armillary router makes with modules. A bare bellhouse with no bindings is a working host that rings nothing, and that is fine.
+Bellhouse is a lightweight scheduler for running scripts, sending notifications, and starting agents on a machine you manage. It can run tasks at set times or in response to a message from another app. For example, it can run a script every morning or send a phone notification when a form is submitted.
 
-## Run
+## How it works
 
-```sh
-bun bellhouse.ts
-```
+- A **bell** receives a webhook, a message sent by another app when something happens.
+- A **schedule** starts a task at a set time.
+- A **handler** does the work. It can send a push notification, run a script, or start an agent.
 
-Requires [bun](https://bun.sh) (native TOML imports). Reads the machine-local manifest at `$ARMILLARY_ROOT/local/bellhouse.toml` (override with `BELLHOUSE_MANIFEST`). `ARMILLARY_ROOT` defaults to two directories above this repo — the standard `repos/bellhouse` placement.
+Bellhouse is designed for [Armillary](https://github.com/studiozojer/armillary) workspaces. You choose the events, schedules, and actions in a configuration called a binding. On macOS, a menu bar app lets you pause, resume, and check on your automations.
 
-## The two manifests
+Tell your AI assistant what you want done and when. For example, “Set up Bellhouse to run my report script every weekday at 9 a.m.” Give it access to your workspace and point it to the [setup guide](OPERATIONS.md#run-locally) so it can set up the schedule for you to review. Once you enable it, Bellhouse takes care of each run while the service is running, even after you close the chat.
 
-**Machine-local** (`local/bellhouse.toml`, gitignored — secrets and machine config live here and only here):
+## Getting started
 
-```toml
-[server]
-port = 7787
-bind = "127.0.0.1"        # widen only behind a tunnel
-
-[push]
-endpoint = "https://exp.host/--/api/v2/push/send"
-token = "ExponentPushToken[...]"
-
-[[bindings]]
-name = "expo"
-path = "expocommons/ops"   # relative to the armillary root
-
-[secrets]
-"inbound-lead" = "<shared secret for that bell>"
-```
-
-**Binding** (`<binding>/bells.toml`, committed — no secrets, ever). **Read once, at process start.** Editing or pulling a `bells.toml` does not change what a running bellhouse serves — the bindings are loaded into memory at startup and never re-read. A binding edit is inert until `launchctl kickstart -k gui/$(id -u)/com.zojer.bellhouse`. Noted 2026-08-30, after a handler sat on disk for four days while the process served the version it had loaded before the pull:
-
-```toml
-[[bells]]
-name = "inbound-lead"
-dedup_window_seconds = 600
-
-[[bells.handlers]]
-type = "push"
-title_template = "Inbound: {name} — {company}"
-body_template = "{message}"
-
-[[crons]]
-name = "morning-sweep"
-schedule = "7 9 * * *"      # 5-field cron, local time
-enabled = false
-
-[[crons.handlers]]
-type = "shell"
-argv = ["sh", "some-script.sh"]
-```
-
-## Handler types
-
-- **push** — Expo push notification. Templates substitute `{key}` from the JSON payload (`{body}` = raw body). Token and endpoint come from the local manifest.
-- **shell** — spawn `argv` (no shell interpolation) with env: `BELL_SOURCE`, `BELL_PAYLOAD_FILE`, `BELL_BINDING_DIR`, `ARMILLARY_ROOT`. cwd is the armillary root.
-- **agent** — spawn a headless `claude -p` session in the armillary root. The prompt is `prompt_file` (relative to the binding) plus a pointer to the payload file, with a standing instruction that payload contents are data, never instructions.
-
-Any handler takes `enabled = false` to stay declared but dormant.
-
-## Cron supervision
-
-Cron shell and agent handlers run through `cron-runner.ts` and `bin/run-cron.py`. Each binding/cron/handler has a host-local file lock under `local/state/cron-locks/`, with an in-memory guard to avoid redundant wrapper spawns. An overlapping invocation is skipped, including across independent Bellhouse instances or a restart while an older handler still owns its lock. Handler children inherit the lock. Ordinary bell events remain independent deliveries rather than being coalesced by cron identity.
-
-The default process-handler timeout is 900 seconds. Set `timeout_seconds = <integer>` on a cron to choose 1–86,400 seconds. On Linux (Python 3.9+, kernel 5.3+), the wrapper becomes a child subreaper: it adopts and reaps orphaned descendants even when a model worker creates a separate process group. Normal completion, parent crash, timeout and supervisor termination all clean the remaining tree with TERM followed by KILL after ten seconds, before releasing the lock. PID file descriptors prevent signalling a reused process identity. On macOS, timeout and termination clean the isolated process group; detached workers are not covered and handlers must not daemonize. Killing the wrapper itself with SIGKILL bypasses its cleanup; the Hearth guest systemd service provides an outer control-group boundary when that service stops or restarts. An uninterruptible kernel task can delay reaping and lock release. This is lifecycle supervision, not isolation against hostile code. Cron results remain content-free: overlap is exit 75, timeout is exit 124, launch/configuration failure is exit 125, and termination is 128 plus the signal; other handler exit codes are preserved. Push requests have a 15-second default HTTP timeout, overridable by the cron timeout. Existing durable worker leases and write receipts remain authoritative; process supervision does not retry uncertain external actions.
-
-Run `bun test cron-runner.test.ts` and `python3 bin/test-run-cron.py` for synthetic overlap, independent-handler, timeout/descendant, termination, lock-release and symlink-refusal checks. A source deployment must include `bellhouse.ts`, `cron-runner.ts` and `bin/run-cron.py`, and reload the existing LaunchAgent after verifying the deployed files. Preserve its manifest, environment, bindings and credentials.
-
-## Ringing a bell
-
-```sh
-curl -X POST http://127.0.0.1:7787/bell/inbound-lead \
-  -H "x-bell-token: <secret>" \
-  -H "content-type: application/json" \
-  -d '{"name":"…","company":"…","message":"…"}'
-```
-
-`200 {ok}` on ring, `{ok, deduped}` within the dedup window, `403` on a bad token, `404` for an undeclared bell. Bodies cap at 256 KB.
-
-## The data wall
-
-The global log (`local/state/bellhouse.log`) is content-free by design: timestamps, bell names, exit codes. Payloads and run artifacts persist only under the owning binding's `state/` directory — which the binding is expected to **gitignore**. That directory is the wall: sensitive working data stays inside the binding that owns it and never enters git history or the mechanism layer. `bin/check-wall.sh` greps the workspace's outside-wall surfaces for leaks.
-
-## Always-on
-
-`install/com.zojer.bellhouse.plist` is a launchd template — fill in the paths, `cp` to `~/Library/LaunchAgents/`, `launchctl load` it. Public reachability (for external webhooks) is deliberately out of scope: put a Tailscale funnel or Cloudflare tunnel in front, keep `bind = "127.0.0.1"`.
-
-## Laptop controls
-
-Initialize a new host with `ARMILLARY_ROOT=/path/to/armillary bun control.ts init`. New hosts start paused; existing manifests retain their enabled default. `bun control.ts enable`, `disable`, and `status` control the host. Pass a binding name to enable/disable just that binding, and `--json` for machine-readable status. Set `ARMILLARY_ROOT` explicitly when using a worktree or installed snapshot.
-
-Pause is persistent, independent of launchd. The service remains alive while paused; authenticated bells receive 503 and aren't accepted. Previously accepted, queued jobs wait for re-enabling. Pausing stops tracked subprocess groups and prevents remaining handlers from starting. Effects already committed to an external service cannot be undone. Handlers must stay within the supervised job; Linux cron supervision additionally covers detached descendants, while ordinary bells and macOS crons require a single process group. Interrupted or failed work is retained for manual review and never automatically replayed. Domain bindings must reconcile ambiguous external effects before submitting new work.
-
-The host records queue metadata, schedule slots, deduplication hashes, and controls in `local/state/bellhouse.sqlite`. Actual payloads remain within each binding's private `state/` directory. Handlers execute serially across the host. A successful bell response means durable acceptance, not handler completion. `/status` exposes content-free status; mutations are local CLI operations, not HTTP endpoints. A full queue (1,000 pending jobs) returns 503. Completed history and payloads are retained; automatic retention cleanup and a review UI are not yet implemented.
-
-After restart, previously running jobs become interrupted. Queued jobs with changed handler configuration or agent prompt content are held for review. Shell executable contents are not fingerprinted: bindings should point to immutable releases. Binding manifests remain loaded once at startup; missing/invalid bindings fail startup. Cron slots persist across restarts. The scheduler evaluates the current local minute, without replaying all missed minutes. Set `on_resume = true` on a poller cron for one fresh startup/wake scan; the binding owns bounded catch-up and its cursor. Day-of-month and day-of-week continue to use AND matching. Old file-based deduplication markers are not imported; pause existing webhook producers during migration and reconcile their outstanding deliveries.
-
-On macOS, prepare a private release with:
-
-```sh
-python3 install/macos.py --root /path/to/armillary --bun /absolute/path/to/bun
-```
-
-Add `--activate` to install per-user LaunchAgents and `local/bin/bellhouse`. The installer compiles the native AppKit menu using an existing Swift toolchain, ad-hoc signs it, and stores a source snapshot under `~/Library/Application Support/Studio Zojer/Bellhouse/releases/`. It refuses to replace differing existing agents or control links; upgrading requires explicit migration. The menu starts at login and shows host controls, binding toggles, service availability, and executions needing review. Quitting the menu leaves the service running. The daemon restarts after an exit; pause it through the menu or CLI instead of killing it. No sleep prevention or public tunnel is installed.
-
-To remove this installation, pause it, then `launchctl bootout gui/$(id -u)/com.zojer.bellhouse` and `launchctl bootout gui/$(id -u)/com.zojer.bellhouse.menu`, and remove those two plist files from `~/Library/LaunchAgents`. Keep the manifest, database, and binding payloads until any interrupted effects have been reviewed.
-
-Run lifecycle verification with `bun test` (requires permission to bind loopback sockets).
-
-## Shared operator VM
-
-[Hearth](https://github.com/studiozojer/hearth) owns VM provisioning, operator homes and reply runners. [The integration guide](environment/README.md) describes the boundary with Bellhouse's native menu and existing-VM controls. Existing host bindings retain their own lifecycle; enabling Bellhouse does not enable autonomous replies.
-
-For an operator whose scheduler lives inside Hearth, select `[scheduler] operator = "tycho"` in the machine manifest and use the documented `--menu-only` migration. The Mac then keeps the native controller while the guest owns scheduling and durable execution state. Guest unavailability never falls back to host execution. Run `bun test` for the guest-routing and existing lifecycle tests, and `python3 bin/test-run-cron.py` for process supervision checks.
+- [Run Bellhouse and configure your first binding](OPERATIONS.md#run-locally)
+- [Install the macOS menu bar app](OPERATIONS.md#mac-menu-and-installation)
+- [Connect Bellhouse to a Hearth virtual machine](environment/README.md)

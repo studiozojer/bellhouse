@@ -14,7 +14,7 @@ limactl = "/opt/homebrew/bin/limactl"
 
 Hearth can explicitly adopt that VM without recreating its disk or moving homes. Its installer preserves the menu's current guest inventory contract, `/etc/bellhouse/operators/<name>.json`, and journal unit name, `bellhouse-operator-<name>.service`. Operator readiness and activity remain independently observed. Enabling the local Bellhouse host does not itself authorize a reply or start a model call.
 
-The macOS menu and immutable installer remain in this repo. Read the root README for those controls and upgrades; see Hearth for VM resources, code releases, credentials and recovery boundaries. Old environment setup is retained in Bellhouse Git history at `dc18abc`.
+The macOS menu and immutable installer remain in this repo. See the [operations guide](../OPERATIONS.md#mac-menu-and-installation) for those controls and upgrades; see Hearth for VM resources, code releases, credentials and recovery boundaries. Old environment setup is retained in Bellhouse Git history at `dc18abc`.
 
 ## Scheduler inside Hearth
 
